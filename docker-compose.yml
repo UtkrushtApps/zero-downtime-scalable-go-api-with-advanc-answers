@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  # Nginx reverse proxy/load balancer
+  nginx:
+    image: nginx:1.25-alpine
+    restart: unless-stopped
+    depends_on:
+      - api
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8080:80"
+    networks:
+      - frontend
+    healthcheck:
+      test: "nginx -t"
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # API Service (multiple replicas; load balanced)
+  api:
+    image: api-server:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - db
+      - redis
+    environment:
+      - DB_DSN=postgres://postgres:postgres@db:5432/api_db?sslmode=disable
+      - REDIS_ADDR=redis:6379
+    expose:
+      - "8080"
+    networks:
+      - frontend
+      - backend
+    deploy:
+      mode: replicated
+      replicas: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--no-verbose", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: api_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - backend
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
